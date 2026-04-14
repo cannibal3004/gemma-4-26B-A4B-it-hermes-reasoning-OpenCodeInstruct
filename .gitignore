@@ -1,0 +1,53 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Training artifacts and large outputs
+output/
+logs/
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+optimizer.pt
+scheduler.pt
+rng_state.pth
+trainer_state.json
+
+# Model/checkpoint directories
+checkpoint-*/
+gemma-hermes-*/
+gemma-4-*/
+
+# Runtime caches
+unsloth_compiled_cache/
+.huggingface/
+.cache/
+
+# TensorBoard
+runs/
+
+# Local config
+.env
+.env.*

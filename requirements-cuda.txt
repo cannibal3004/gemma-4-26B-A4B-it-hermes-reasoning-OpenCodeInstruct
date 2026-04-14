@@ -1,0 +1,18 @@
+# CUDA environment dependencies for training/inference in this repo.
+# This file pulls CUDA-enabled PyTorch wheels from the official PyTorch index.
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+
+transformers>=4.50.0,<5.0.0
+peft>=0.18.1
+trl>=0.16.0
+datasets>=3.0.0
+accelerate>=1.0.0
+safetensors>=0.4.3
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+tensorboard>=2.20.0
+huggingface_hub>=0.25.0
