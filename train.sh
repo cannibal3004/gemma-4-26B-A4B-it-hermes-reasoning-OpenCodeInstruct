@@ -36,6 +36,9 @@ export START_TENSORBOARD=${START_TENSORBOARD:-true}
 export TENSORBOARD_HOST=${TENSORBOARD_HOST:-127.0.0.1}
 export TENSORBOARD_PORT=${TENSORBOARD_PORT:-6006}
 
+DEFAULT_BATCH_SIZE=2
+DEFAULT_GRADIENT_ACCUMULATION_STEPS=8
+
 if [[ "$ACCELERATOR_BACKEND" == "auto" ]]; then
 	ACCELERATOR_BACKEND=$(detect_accelerator_backend)
 	if [[ -z "$ACCELERATOR_BACKEND" ]]; then
@@ -49,7 +52,13 @@ case "$ACCELERATOR_BACKEND" in
 	rocm)
 		export TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=${TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL:-1}
 		;;
-	cuda|cpu)
+	cuda)
+		export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+		DEFAULT_BATCH_SIZE=1
+		DEFAULT_GRADIENT_ACCUMULATION_STEPS=16
+		unset TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL || true
+		;;
+	cpu)
 		unset TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL || true
 		;;
 	*)
@@ -58,6 +67,9 @@ case "$ACCELERATOR_BACKEND" in
 		exit 1
 		;;
 esac
+
+export BATCH_SIZE=${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
+export GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-$DEFAULT_GRADIENT_ACCUMULATION_STEPS}
 
 TB_PID=""
 
@@ -80,6 +92,10 @@ TB_LOG_FILE="$MODEL_OUT_DIR/logs/tensorboard-$(date +%Y%m%d-%H%M%S).log"
 echo "Logging to: $LOG_FILE"
 echo "Accelerator backend: $ACCELERATOR_BACKEND"
 echo "Model name: $MODEL_NAME"
+echo "Batch config: BATCH_SIZE=$BATCH_SIZE, GRADIENT_ACCUMULATION_STEPS=$GRADIENT_ACCUMULATION_STEPS"
+if [[ "$ACCELERATOR_BACKEND" == "cuda" ]]; then
+	echo "CUDA allocator config: ${PYTORCH_CUDA_ALLOC_CONF:-unset}"
+fi
 echo "Training output dir: $OUTPUT_DIR"
 LATEST_CHECKPOINT=$(find "$OUTPUT_DIR" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V | tail -n 1 || true)
 if [[ -n "$LATEST_CHECKPOINT" ]]; then
