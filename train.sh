@@ -2,7 +2,7 @@
 set -euo pipefail
 
 detect_accelerator_backend() {
-	conda run --no-capture-output -n finetune python - <<'PY'
+	python - <<'PY'
 import torch
 
 backend = "cpu"
@@ -31,7 +31,7 @@ export LEARNING_RATE=5e-5
 # Attention-only LoRA by default to better preserve base coding ability.
 export TARGET_MODULES=q_proj,k_proj,v_proj,o_proj
 export REPORT_TO=tensorboard
-export TENSORBOARD_LOG_DIR=${TENSORBOARD_LOG_DIR:-$MODEL_OUT_DIR/tensorboard}
+export TENSORBOARD_LOG_DIR=${TENSORBOARD_LOG_DIR:-$MODEL_OUT_DIR/results/runs}
 export START_TENSORBOARD=${START_TENSORBOARD:-true}
 export TENSORBOARD_HOST=${TENSORBOARD_HOST:-127.0.0.1}
 export TENSORBOARD_PORT=${TENSORBOARD_PORT:-6006}
@@ -97,8 +97,7 @@ fi
 
 if [[ "$START_TENSORBOARD" == "true" ]]; then
 	echo "Starting TensorBoard in background (logs: $TB_LOG_FILE)"
-	conda run --no-capture-output -n finetune \
-		tensorboard --logdir "$TENSORBOARD_LOG_DIR" --host "$TENSORBOARD_HOST" --port "$TENSORBOARD_PORT" \
+	tensorboard --logdir "$TENSORBOARD_LOG_DIR" --host "$TENSORBOARD_HOST" --port "$TENSORBOARD_PORT" \
 		>"$TB_LOG_FILE" 2>&1 &
 	TB_PID=$!
 	echo "TensorBoard started with PID: $TB_PID"
@@ -106,7 +105,7 @@ fi
 
 # Stream output in real time and also save it to a log file.
 set +e
-conda run --no-capture-output -n finetune python -u ./train_lora.py 2>&1 | tee -a "$LOG_FILE"
+python -u ./train_lora.py 2>&1 | tee -a "$LOG_FILE"
 TRAIN_EXIT_CODE=${PIPESTATUS[0]}
 set -e
 

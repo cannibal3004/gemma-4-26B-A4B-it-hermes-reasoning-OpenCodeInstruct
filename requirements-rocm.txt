@@ -1,6 +1,6 @@
 # ROCm environment dependencies for training/inference in this repo.
 # This file pulls ROCm-enabled PyTorch wheels from the official PyTorch index.
---extra-index-url https://download.pytorch.org/whl/rocm6.2
+--extra-index-url https://download.pytorch.org/whl/rocm7.2
 
 torch==2.6.0
 torchvision==0.21.0

@@ -1,6 +1,6 @@
 # CUDA environment dependencies for training/inference in this repo.
 # This file pulls CUDA-enabled PyTorch wheels from the official PyTorch index.
---extra-index-url https://download.pytorch.org/whl/cu130
+--extra-index-url https://download.pytorch.org/whl/cpu
 
 torch==2.6.0
 torchvision==0.21.0
