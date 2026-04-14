@@ -3,9 +3,9 @@
 --extra-index-url https://download.pytorch.org/whl/cu130
 
 # Pin the CUDA build tag so pip replaces older installed wheels like +cu126.
-torch==2.6.0+cu130
-torchvision==0.21.0+cu130
-torchaudio==2.6.0+cu130
+torch==2.11.0+cu130
+torchvision==0.26.0+cu130
+torchaudio==2.11.0+cu130
 
 # Gemma 4 support may require newer-than-release Transformers.
 transformers @ git+https://github.com/huggingface/transformers.git
