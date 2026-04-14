@@ -9,7 +9,7 @@ torchaudio==2.6.0
 # Gemma 4 support may require newer-than-release Transformers.
 transformers @ git+https://github.com/huggingface/transformers.git
 peft>=0.18.1
-trl>=0.16.0
+trl>=0.24.0
 datasets>=3.0.0
 accelerate>=1.0.0
 safetensors>=0.4.3
