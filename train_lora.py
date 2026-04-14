@@ -300,7 +300,7 @@ def load_tokenizer(model_id):
         tokenizer_kwargs["additional_special_tokens"] = additional_special_tokens
         tokenizer_kwargs["extra_special_tokens"] = {}
 
-    return AutoTokenizer.from_pretrained(model_id, **tokenizer_kwargs)
+    return AutoTokenizer.from_pretrained(model_id, trust_remote_code=True, **tokenizer_kwargs)
 
 
 def train():
@@ -354,6 +354,7 @@ def train():
         dtype=torch.bfloat16,
         device_map="auto",
         attn_implementation="sdpa",
+        trust_remote_code=True,
     )
 
     model = convert_custom_layers(model)
