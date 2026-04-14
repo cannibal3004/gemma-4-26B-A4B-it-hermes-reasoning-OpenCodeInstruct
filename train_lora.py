@@ -22,6 +22,11 @@ from transformers.trainer_utils import get_last_checkpoint
 from peft import LoraConfig, get_peft_model, TaskType
 from trl import SFTTrainer
 
+try:
+    from trl.trainer.sft_config import SFTConfig
+except ImportError:
+    SFTConfig = None
+
 # --- ROCm runtime hints ---
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 torch.set_float32_matmul_precision("high")
@@ -398,15 +403,16 @@ def train():
     }
     training_args = TrainingArguments(**filtered_training_args_kwargs)
 
-    # Compatibility shim: some TRL versions expect this legacy key.
-    original_to_dict = training_args.to_dict
+    # Compatibility shim: only older TRL builds expect this legacy key.
+    if SFTConfig is not None and "push_to_hub_token" in inspect.signature(SFTConfig.__init__).parameters:
+        original_to_dict = training_args.to_dict
 
-    def compat_to_dict():
-        data = original_to_dict()
-        data.setdefault("push_to_hub_token", None)
-        return data
+        def compat_to_dict():
+            data = original_to_dict()
+            data.setdefault("push_to_hub_token", None)
+            return data
 
-    training_args.to_dict = compat_to_dict
+        training_args.to_dict = compat_to_dict
 
     trainer_kwargs = {
         "model": model,
