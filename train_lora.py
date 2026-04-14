@@ -1,5 +1,6 @@
 import os
 import inspect
+import json
 
 ACCELERATOR_BACKEND = os.getenv("ACCELERATOR_BACKEND", "auto").strip().lower()
 if ACCELERATOR_BACKEND not in {"auto", "rocm", "cuda", "cpu"}:
@@ -10,6 +11,7 @@ if ACCELERATOR_BACKEND == "rocm":
 
 import torch
 from datasets import concatenate_datasets, load_dataset
+from huggingface_hub import hf_hub_download
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -279,6 +281,28 @@ def detect_runtime_backend():
     return "cuda"
 
 
+def load_tokenizer(model_id):
+    tokenizer_kwargs = {}
+
+    # Some Gemma tokenizer configs publish extra_special_tokens as a list, while
+    # certain transformers builds expect a dict. Normalize that here so Colab
+    # environments with newer Python / mixed package versions keep working.
+    tokenizer_config_path = hf_hub_download(repo_id=model_id, filename="tokenizer_config.json")
+    with open(tokenizer_config_path, encoding="utf-8") as file_obj:
+        tokenizer_config = json.load(file_obj)
+
+    extra_special_tokens = tokenizer_config.get("extra_special_tokens")
+    if isinstance(extra_special_tokens, list):
+        additional_special_tokens = list(tokenizer_config.get("additional_special_tokens") or [])
+        for token in extra_special_tokens:
+            if token not in additional_special_tokens:
+                additional_special_tokens.append(token)
+        tokenizer_kwargs["additional_special_tokens"] = additional_special_tokens
+        tokenizer_kwargs["extra_special_tokens"] = {}
+
+    return AutoTokenizer.from_pretrained(model_id, **tokenizer_kwargs)
+
+
 def train():
     runtime_backend = detect_runtime_backend()
     print(f"Starting fine-tuning for {MODEL_ID}")
@@ -294,7 +318,7 @@ def train():
         f"tensorboard_log_dir={TENSORBOARD_LOG_DIR}"
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    tokenizer = load_tokenizer(MODEL_ID)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
