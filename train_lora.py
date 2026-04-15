@@ -453,6 +453,16 @@ def resolve_attention_impl(runtime_backend):
     return ["sdpa"]
 
 
+def configure_cuda_sdpa_kernels(allow_math=False):
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.enable_math_sdp(allow_math)
+    print(
+        "CUDA SDPA kernels: "
+        f"flash=True, mem_efficient=True, math={allow_math}"
+    )
+
+
 def probe_attention_runtime(model, runtime_backend):
     """Run a tiny forward pass to catch runtime kernel incompatibilities early."""
     if runtime_backend != "cuda":
@@ -508,12 +518,9 @@ def train():
         f"{attention_candidates} (ATTN_IMPLEMENTATION={ATTN_IMPLEMENTATION})"
     )
     if runtime_backend == "cuda" and "sdpa" in attention_candidates:
-        # Prevent SDPA from falling back to the math kernel, which can trigger
-        # extreme O(n^2) allocations for long-context attention.
-        torch.backends.cuda.enable_flash_sdp(True)
-        torch.backends.cuda.enable_mem_efficient_sdp(True)
-        torch.backends.cuda.enable_math_sdp(False)
-        print("CUDA SDPA kernels: flash=True, mem_efficient=True, math=False")
+        # Prefer flash/mem-efficient kernels first; enable math fallback only
+        # when runtime probing reports no valid backend.
+        configure_cuda_sdpa_kernels(allow_math=False)
     print(
         f"Reporting backends={REPORT_TO if REPORT_TO else ['none']}, "
         f"tensorboard_log_dir={TENSORBOARD_LOG_DIR}"
@@ -562,6 +569,10 @@ def train():
                 trust_remote_code=True,
             )
             ok, probe_error = probe_attention_runtime(model, runtime_backend)
+            if not ok and attention_impl == "sdpa" and "Invalid backend" in (probe_error or ""):
+                print("SDPA runtime probe reported Invalid backend. Retrying with math SDPA enabled.")
+                configure_cuda_sdpa_kernels(allow_math=True)
+                ok, probe_error = probe_attention_runtime(model, runtime_backend)
             if not ok:
                 print(
                     f"Runtime probe failed for attn_implementation={attention_impl}: {probe_error}"
@@ -580,6 +591,7 @@ def train():
     if model is None:
         if attention_candidates != ["sdpa"]:
             print("All requested attention backends failed. Final fallback: attn_implementation=sdpa")
+            configure_cuda_sdpa_kernels(allow_math=True)
             model = AutoModelForCausalLM.from_pretrained(
                 MODEL_ID,
                 dtype=torch.bfloat16,
@@ -587,6 +599,11 @@ def train():
                 attn_implementation="sdpa",
                 trust_remote_code=True,
             )
+            ok, probe_error = probe_attention_runtime(model, runtime_backend)
+            if not ok:
+                raise RuntimeError(
+                    f"Final SDPA fallback failed runtime probe: {probe_error}"
+                )
         else:
             raise RuntimeError("Unable to load model with requested attention backend(s)") from last_exception
 
