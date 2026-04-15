@@ -1,6 +1,7 @@
 import os
 import inspect
 import json
+import re
 
 ACCELERATOR_BACKEND = os.getenv("ACCELERATOR_BACKEND", "auto").strip().lower()
 if ACCELERATOR_BACKEND not in {"auto", "rocm", "cuda", "cpu"}:
@@ -114,21 +115,43 @@ def convert_custom_layers(model):
 
 def formatting_func(example):
     convs = example["conversations"]
-    system_msg = ""
-    user_msg = ""
-    assistant_msg = ""
+    tools_json = (example.get("tools") or "").strip()
+    system_messages = []
+    serialized_turns = []
+
+    role_map = {
+        "system": "system",
+        "human": "user",
+        "user": "user",
+        "gpt": "model",
+        "assistant": "model",
+        "tool": "user",
+    }
 
     for turn in convs:
-        if turn["from"] == "system":
-            system_msg = turn["value"]
-        elif turn["from"] == "user":
-            user_msg = turn["value"]
-        elif turn["from"] == "assistant":
-            assistant_msg = turn["value"]
+        raw_role = turn.get("from")
+        role = role_map.get(raw_role)
+        content = (turn.get("value") or "").strip()
 
-    full_prompt = f"<start_of_turn>user\n{system_msg}\n\n{user_msg}<end_of_turn>\n"
-    full_prompt += f"<start_of_turn>model\n{assistant_msg}<end_of_turn>"
-    return {"text": full_prompt}
+        if not role or not content:
+            continue
+
+        if role == "system":
+            system_messages.append(content)
+            continue
+
+        if not serialized_turns and role == "user":
+            prefix_parts = []
+            if system_messages:
+                prefix_parts.append("\n\n".join(system_messages))
+            if tools_json:
+                prefix_parts.append(f"<tools>\n{tools_json}\n</tools>")
+            if prefix_parts:
+                content = "\n\n".join(prefix_parts + [content])
+
+        serialized_turns.append(f"<start_of_turn>{role}\n{content}<end_of_turn>")
+
+    return {"text": "\n".join(serialized_turns)}
 
 
 def format_reasoning_example(example):
@@ -237,38 +260,133 @@ class Gemma4TextOnlyCollator:
     """Adds mm_token_type_ids required by Gemma4 text training."""
 
     def __init__(self, tokenizer):
-        self.base_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        self.tokenizer = tokenizer
+        self.model_start_ids = tokenizer("<start_of_turn>model\n", add_special_tokens=False)["input_ids"]
+        self.end_turn_ids = tokenizer("<end_of_turn>", add_special_tokens=False)["input_ids"]
+
+    @staticmethod
+    def _find_subsequence(sequence, subsequence, start_index=0):
+        max_start = len(sequence) - len(subsequence) + 1
+        for index in range(start_index, max_start):
+            if sequence[index : index + len(subsequence)] == subsequence:
+                return index
+        return -1
 
     def __call__(self, features):
-        batch = self.base_collator(features)
+        batch = self.tokenizer.pad(features, padding=True, return_tensors="pt")
+        input_ids = batch["input_ids"]
+        labels = torch.full_like(input_ids, fill_value=-100)
+
+        for row_index, token_row in enumerate(input_ids.tolist()):
+            search_start = 0
+            while True:
+                model_start = self._find_subsequence(token_row, self.model_start_ids, search_start)
+                if model_start < 0:
+                    break
+
+                content_start = model_start + len(self.model_start_ids)
+                turn_end = self._find_subsequence(token_row, self.end_turn_ids, content_start)
+                if turn_end < 0:
+                    label_end = len(token_row)
+                    search_start = len(token_row)
+                else:
+                    label_end = turn_end + len(self.end_turn_ids)
+                    search_start = label_end
+
+                if content_start < label_end:
+                    labels[row_index, content_start:label_end] = input_ids[row_index, content_start:label_end]
+
+        batch["labels"] = labels
         batch["mm_token_type_ids"] = torch.zeros_like(batch["input_ids"], dtype=torch.long)
         return batch
+
+
+TURN_PATTERN = re.compile(r"<start_of_turn>.*?<end_of_turn>\n?", re.DOTALL)
+
+
+def split_text_into_turns(text):
+    turns = TURN_PATTERN.findall(text)
+    if turns:
+        return turns
+    return [text]
+
+
+def slice_turn_to_token_windows(turn_ids):
+    windows = []
+    for start in range(0, len(turn_ids), CHUNK_STRIDE):
+        window = turn_ids[start : start + MAX_SEQ_LENGTH]
+        if not window:
+            break
+        if len(window) < MIN_CHUNK_TOKENS and start > 0:
+            break
+        windows.append(window)
+        if start + MAX_SEQ_LENGTH >= len(turn_ids):
+            break
+    return windows
 
 
 def chunk_and_tokenize_batch(batch, tokenizer):
     chunk_input_ids = []
     chunk_attention_masks = []
+    overlap_token_budget = max(0, MAX_SEQ_LENGTH - CHUNK_STRIDE)
 
     for text in batch["text"]:
-        ids = tokenizer(text, add_special_tokens=False, truncation=False)["input_ids"]
-        if not ids:
+        turn_texts = split_text_into_turns(text)
+        if not turn_texts:
             continue
 
-        if len(ids) <= MAX_SEQ_LENGTH:
-            chunk_input_ids.append(ids)
-            chunk_attention_masks.append([1] * len(ids))
-            continue
+        tokenized_turns = [
+            tokenizer(turn_text, add_special_tokens=False, truncation=False)["input_ids"]
+            for turn_text in turn_texts
+        ]
 
-        for start in range(0, len(ids), CHUNK_STRIDE):
-            window = ids[start : start + MAX_SEQ_LENGTH]
-            if not window:
-                break
-            if len(window) < MIN_CHUNK_TOKENS and start > 0:
-                break
-            chunk_input_ids.append(window)
-            chunk_attention_masks.append([1] * len(window))
-            if start + MAX_SEQ_LENGTH >= len(ids):
-                break
+        current_chunk = []
+        current_length = 0
+
+        def flush_chunk():
+            nonlocal current_chunk, current_length
+            if current_chunk and current_length >= MIN_CHUNK_TOKENS:
+                merged = []
+                for turn_ids in current_chunk:
+                    merged.extend(turn_ids)
+                chunk_input_ids.append(merged)
+                chunk_attention_masks.append([1] * len(merged))
+
+                if overlap_token_budget > 0:
+                    kept_turns = []
+                    kept_length = 0
+                    for turn_ids in reversed(current_chunk):
+                        if kept_length + len(turn_ids) > overlap_token_budget:
+                            break
+                        kept_turns.insert(0, turn_ids)
+                        kept_length += len(turn_ids)
+                    current_chunk = kept_turns
+                    current_length = kept_length
+                else:
+                    current_chunk = []
+                    current_length = 0
+
+        for turn_ids in tokenized_turns:
+            if not turn_ids:
+                continue
+
+            if len(turn_ids) > MAX_SEQ_LENGTH:
+                flush_chunk()
+                for window in slice_turn_to_token_windows(turn_ids):
+                    if len(window) >= MIN_CHUNK_TOKENS:
+                        chunk_input_ids.append(window)
+                        chunk_attention_masks.append([1] * len(window))
+                current_chunk = []
+                current_length = 0
+                continue
+
+            if current_length + len(turn_ids) > MAX_SEQ_LENGTH:
+                flush_chunk()
+
+            current_chunk.append(turn_ids)
+            current_length += len(turn_ids)
+
+        flush_chunk()
 
     return {
         "input_ids": chunk_input_ids,
