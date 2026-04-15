@@ -7,9 +7,6 @@ ACCELERATOR_BACKEND = os.getenv("ACCELERATOR_BACKEND", "auto").strip().lower()
 if ACCELERATOR_BACKEND not in {"auto", "rocm", "cuda", "cpu"}:
     raise ValueError("ACCELERATOR_BACKEND must be one of: auto, rocm, cuda, cpu")
 
-if ACCELERATOR_BACKEND == "rocm":
-    os.environ.setdefault("PYTORCH_HIP_ALLOC_CONF", "expandable_segments:True")
-
 import torch
 from datasets import concatenate_datasets, load_dataset
 from huggingface_hub import hf_hub_download
@@ -640,16 +637,16 @@ def train():
     }
     training_args = TrainingArguments(**filtered_training_args_kwargs)
 
-    # Compatibility shim: only older TRL builds expect this legacy key.
-    if SFTConfig is not None and "push_to_hub_token" in inspect.signature(SFTConfig.__init__).parameters:
-        original_to_dict = training_args.to_dict
+    # TRL releases disagree on whether push_to_hub_token is present, but some
+    # versions unconditionally pop it from args.to_dict(). Always include it.
+    original_to_dict = training_args.to_dict
 
-        def compat_to_dict():
-            data = original_to_dict()
-            data.setdefault("push_to_hub_token", None)
-            return data
+    def compat_to_dict():
+        data = original_to_dict()
+        data.setdefault("push_to_hub_token", None)
+        return data
 
-        training_args.to_dict = compat_to_dict
+    training_args.to_dict = compat_to_dict
 
     trainer_kwargs = {
         "model": model,
