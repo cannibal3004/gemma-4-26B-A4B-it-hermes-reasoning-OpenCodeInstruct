@@ -299,15 +299,7 @@ class Gemma4TextOnlyCollator:
                     labels[row_index, content_start:label_end] = input_ids[row_index, content_start:label_end]
 
         batch["labels"] = labels
-        # For batch_size=1 with no padding, an explicit all-ones mask can force
-        # less memory-efficient attention paths in some backends.
-        attention_mask = batch.get("attention_mask")
-        if (
-            attention_mask is not None
-            and attention_mask.shape[0] == 1
-            and bool(torch.all(attention_mask == 1).item())
-        ):
-            del batch["attention_mask"]
+        # Preserve attention_mask for TRL/transformers trainer compatibility.
         batch["mm_token_type_ids"] = torch.zeros_like(batch["input_ids"], dtype=torch.long)
         return batch
 
