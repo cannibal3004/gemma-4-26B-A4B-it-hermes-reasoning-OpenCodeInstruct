@@ -416,11 +416,11 @@ def detect_runtime_backend():
 
 def resolve_attention_impl(runtime_backend):
     if ATTN_IMPLEMENTATION != "auto":
-        return ATTN_IMPLEMENTATION
+        return [ATTN_IMPLEMENTATION]
     # CUDA long-context runs are significantly more stable with flash-attn kernels.
     if runtime_backend == "cuda":
-        return "flash_attention_2"
-    return "sdpa"
+        return ["flash_attention_3", "flash_attention_2", "sdpa"]
+    return ["sdpa"]
 
 
 def load_tokenizer(model_id):
@@ -455,9 +455,12 @@ def train():
         f"ENABLE_CHUNKING={ENABLE_CHUNKING}, CHUNK_STRIDE={CHUNK_STRIDE}, "
         f"CHUNK_BATCH_SIZE={CHUNK_BATCH_SIZE}, CHUNK_NUM_PROC={CHUNK_NUM_PROC}"
     )
-    attention_impl = resolve_attention_impl(runtime_backend)
-    print(f"Attention backend request: {attention_impl} (ATTN_IMPLEMENTATION={ATTN_IMPLEMENTATION})")
-    if runtime_backend == "cuda" and attention_impl == "sdpa":
+    attention_candidates = resolve_attention_impl(runtime_backend)
+    print(
+        "Attention backend candidates: "
+        f"{attention_candidates} (ATTN_IMPLEMENTATION={ATTN_IMPLEMENTATION})"
+    )
+    if runtime_backend == "cuda" and "sdpa" in attention_candidates:
         # Prevent SDPA from falling back to the math kernel, which can trigger
         # extreme O(n^2) allocations for long-context attention.
         torch.backends.cuda.enable_flash_sdp(True)
@@ -500,18 +503,26 @@ def train():
         print(f"Chunked dataset rows: {len(dataset)} (from {original_rows})")
 
     print("Loading model in BF16...")
-    try:
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID,
-            dtype=torch.bfloat16,
-            device_map="auto",
-            attn_implementation=attention_impl,
-            trust_remote_code=True,
-        )
-    except Exception as exc:
-        if attention_impl != "sdpa":
+    model = None
+    last_exception = None
+    for attention_impl in attention_candidates:
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                MODEL_ID,
+                dtype=torch.bfloat16,
+                device_map="auto",
+                attn_implementation=attention_impl,
+                trust_remote_code=True,
+            )
+            print(f"Loaded model with attn_implementation={attention_impl}")
+            break
+        except Exception as exc:
+            last_exception = exc
             print(f"Failed to load with attn_implementation={attention_impl}: {exc}")
-            print("Falling back to attn_implementation=sdpa")
+
+    if model is None:
+        if attention_candidates != ["sdpa"]:
+            print("All requested attention backends failed. Final fallback: attn_implementation=sdpa")
             model = AutoModelForCausalLM.from_pretrained(
                 MODEL_ID,
                 dtype=torch.bfloat16,
@@ -520,7 +531,7 @@ def train():
                 trust_remote_code=True,
             )
         else:
-            raise
+            raise RuntimeError("Unable to load model with requested attention backend(s)") from last_exception
 
     model = convert_custom_layers(model)
 

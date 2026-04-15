@@ -9,6 +9,8 @@ torchaudio==2.11.0+cu130
 
 # Gemma 4 support may require newer-than-release Transformers.
 transformers @ git+https://github.com/huggingface/transformers.git
+# FlashAttention 3 (CUDA 13 path). Keep optional in case your platform build is unavailable.
+flash-attn-3
 peft>=0.18.1
 trl>=0.24.0
 datasets>=3.0.0
