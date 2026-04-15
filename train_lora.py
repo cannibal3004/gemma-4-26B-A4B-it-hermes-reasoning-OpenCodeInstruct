@@ -79,6 +79,7 @@ REPORT_TO = [entry.strip() for entry in os.getenv("REPORT_TO", "tensorboard").sp
 if len(REPORT_TO) == 1 and REPORT_TO[0].lower() == "none":
     REPORT_TO = []
 TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_DIR", os.path.join(OUTPUT_DIR, "tensorboard"))
+ATTN_IMPLEMENTATION = os.getenv("ATTN_IMPLEMENTATION", "auto").strip().lower()
 
 
 def convert_custom_layers(model):
@@ -297,6 +298,15 @@ class Gemma4TextOnlyCollator:
                     labels[row_index, content_start:label_end] = input_ids[row_index, content_start:label_end]
 
         batch["labels"] = labels
+        # For batch_size=1 with no padding, an explicit all-ones mask can force
+        # less memory-efficient attention paths in some backends.
+        attention_mask = batch.get("attention_mask")
+        if (
+            attention_mask is not None
+            and attention_mask.shape[0] == 1
+            and bool(torch.all(attention_mask == 1).item())
+        ):
+            del batch["attention_mask"]
         batch["mm_token_type_ids"] = torch.zeros_like(batch["input_ids"], dtype=torch.long)
         return batch
 
@@ -404,6 +414,15 @@ def detect_runtime_backend():
     return "cuda"
 
 
+def resolve_attention_impl(runtime_backend):
+    if ATTN_IMPLEMENTATION != "auto":
+        return ATTN_IMPLEMENTATION
+    # CUDA long-context runs are significantly more stable with flash-attn kernels.
+    if runtime_backend == "cuda":
+        return "flash_attention_2"
+    return "sdpa"
+
+
 def load_tokenizer(model_id):
     tokenizer_kwargs = {}
 
@@ -436,6 +455,15 @@ def train():
         f"ENABLE_CHUNKING={ENABLE_CHUNKING}, CHUNK_STRIDE={CHUNK_STRIDE}, "
         f"CHUNK_BATCH_SIZE={CHUNK_BATCH_SIZE}, CHUNK_NUM_PROC={CHUNK_NUM_PROC}"
     )
+    attention_impl = resolve_attention_impl(runtime_backend)
+    print(f"Attention backend request: {attention_impl} (ATTN_IMPLEMENTATION={ATTN_IMPLEMENTATION})")
+    if runtime_backend == "cuda" and attention_impl == "sdpa":
+        # Prevent SDPA from falling back to the math kernel, which can trigger
+        # extreme O(n^2) allocations for long-context attention.
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(False)
+        print("CUDA SDPA kernels: flash=True, mem_efficient=True, math=False")
     print(
         f"Reporting backends={REPORT_TO if REPORT_TO else ['none']}, "
         f"tensorboard_log_dir={TENSORBOARD_LOG_DIR}"
@@ -471,14 +499,28 @@ def train():
             )
         print(f"Chunked dataset rows: {len(dataset)} (from {original_rows})")
 
-    print("Loading model in BF16 (ROCm)...")
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        dtype=torch.bfloat16,
-        device_map="auto",
-        attn_implementation="sdpa",
-        trust_remote_code=True,
-    )
+    print("Loading model in BF16...")
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            dtype=torch.bfloat16,
+            device_map="auto",
+            attn_implementation=attention_impl,
+            trust_remote_code=True,
+        )
+    except Exception as exc:
+        if attention_impl != "sdpa":
+            print(f"Failed to load with attn_implementation={attention_impl}: {exc}")
+            print("Falling back to attn_implementation=sdpa")
+            model = AutoModelForCausalLM.from_pretrained(
+                MODEL_ID,
+                dtype=torch.bfloat16,
+                device_map="auto",
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+            )
+        else:
+            raise
 
     model = convert_custom_layers(model)
 
