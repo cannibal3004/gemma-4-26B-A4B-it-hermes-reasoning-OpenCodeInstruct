@@ -21,7 +21,35 @@ export ENABLE_CHUNKING=true
 export MAX_SEQ_LENGTH=65536
 export CHUNK_STRIDE=49152
 export MODEL_NAME=${MODEL_NAME:-gemma-4-26B-A4B-it-hermes-reasoning-OpenCodeInstruct}
-export MODEL_OUT_DIR=${MODEL_OUT_DIR:-./output/$MODEL_NAME}
+export COLAB_DRIVE_MOUNT=${COLAB_DRIVE_MOUNT:-/content/drive/MyDrive}
+export USE_DRIVE_CACHE=${USE_DRIVE_CACHE:-auto}
+
+if [[ "$USE_DRIVE_CACHE" == "auto" ]]; then
+	if [[ -d "$COLAB_DRIVE_MOUNT" ]]; then
+		USE_DRIVE_CACHE=true
+	else
+		USE_DRIVE_CACHE=false
+	fi
+fi
+
+if [[ "$USE_DRIVE_CACHE" == "true" ]] && [[ ! -d "$COLAB_DRIVE_MOUNT" ]]; then
+	echo "USE_DRIVE_CACHE=true but drive mount not found at $COLAB_DRIVE_MOUNT; falling back to local cache."
+	USE_DRIVE_CACHE=false
+fi
+
+if [[ "$USE_DRIVE_CACHE" == "true" ]]; then
+	export PERSIST_ROOT=${PERSIST_ROOT:-$COLAB_DRIVE_MOUNT/rocm_finetune_cache}
+	export HF_HOME=${HF_HOME:-$PERSIST_ROOT/hf}
+	export HF_HUB_CACHE=${HF_HUB_CACHE:-$HF_HOME/hub}
+	export HUGGINGFACE_HUB_CACHE=${HUGGINGFACE_HUB_CACHE:-$HF_HUB_CACHE}
+	export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-$HF_HOME/datasets}
+	export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-$HF_HOME/transformers}
+	DEFAULT_MODEL_OUT_DIR="$PERSIST_ROOT/output/$MODEL_NAME"
+else
+	DEFAULT_MODEL_OUT_DIR="./output/$MODEL_NAME"
+fi
+
+export MODEL_OUT_DIR=${MODEL_OUT_DIR:-$DEFAULT_MODEL_OUT_DIR}
 export OUTPUT_DIR=${OUTPUT_DIR:-$MODEL_OUT_DIR/results}
 export ADAPTER_DIR=${ADAPTER_DIR:-$MODEL_OUT_DIR/adapter}
 export NUM_EPOCHS=0.5
@@ -85,6 +113,10 @@ cleanup() {
 
 trap cleanup EXIT
 
+if [[ "$USE_DRIVE_CACHE" == "true" ]]; then
+	mkdir -p "$PERSIST_ROOT" "$HF_HOME" "$HF_HUB_CACHE" "$HF_DATASETS_CACHE" "$TRANSFORMERS_CACHE"
+fi
+
 mkdir -p "$MODEL_OUT_DIR/logs"
 mkdir -p "$TENSORBOARD_LOG_DIR"
 mkdir -p "$OUTPUT_DIR"
@@ -97,6 +129,13 @@ echo "Model name: $MODEL_NAME"
 echo "Batch config: BATCH_SIZE=$BATCH_SIZE, GRADIENT_ACCUMULATION_STEPS=$GRADIENT_ACCUMULATION_STEPS"
 echo "Attention implementation: ${ATTN_IMPLEMENTATION:-auto}"
 echo "Prefer flash-attention-3: ${PREFER_FLASH_ATTENTION_3:-false}"
+echo "Use drive cache: ${USE_DRIVE_CACHE:-false}"
+if [[ "$USE_DRIVE_CACHE" == "true" ]]; then
+	echo "Persistent cache root: ${PERSIST_ROOT}"
+	echo "HF_HOME: ${HF_HOME}"
+	echo "HF_DATASETS_CACHE: ${HF_DATASETS_CACHE}"
+	echo "TRANSFORMERS_CACHE: ${TRANSFORMERS_CACHE}"
+fi
 if [[ "$ACCELERATOR_BACKEND" == "cuda" ]]; then
 	echo "CUDA allocator config: ${PYTORCH_CUDA_ALLOC_CONF:-unset}"
 fi
