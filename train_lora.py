@@ -80,6 +80,7 @@ if len(REPORT_TO) == 1 and REPORT_TO[0].lower() == "none":
     REPORT_TO = []
 TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_DIR", os.path.join(OUTPUT_DIR, "tensorboard"))
 ATTN_IMPLEMENTATION = os.getenv("ATTN_IMPLEMENTATION", "auto").strip().lower()
+PREFER_FLASH_ATTENTION_3 = os.getenv("PREFER_FLASH_ATTENTION_3", "false").lower() in {"1", "true", "yes", "y"}
 
 
 def convert_custom_layers(model):
@@ -442,9 +443,12 @@ def resolve_attention_impl(runtime_backend):
 
     # CUDA long-context runs are significantly more stable with flash-attn kernels.
     if runtime_backend == "cuda":
-        if fa3_ok:
+        if PREFER_FLASH_ATTENTION_3 and fa3_ok:
             return ["flash_attention_3", "flash_attention_2", "sdpa"]
-        print(f"Skipping flash_attention_3 on this CUDA device: {fa3_reason}")
+        if PREFER_FLASH_ATTENTION_3 and not fa3_ok:
+            print(f"Skipping flash_attention_3 on this CUDA device: {fa3_reason}")
+        elif not PREFER_FLASH_ATTENTION_3:
+            print("PREFER_FLASH_ATTENTION_3 is disabled; using flash_attention_2 -> sdpa")
         return ["flash_attention_2", "sdpa"]
     return ["sdpa"]
 
