@@ -435,6 +435,9 @@ def resolve_attention_impl(runtime_backend):
                 f"{fa3_reason}. Falling back to flash_attention_2 -> sdpa."
             )
             return ["flash_attention_2", "sdpa"]
+        if ATTN_IMPLEMENTATION == "flash_attention_3":
+            print("Requested ATTN_IMPLEMENTATION=flash_attention_3; enabling fallback chain flash_attention_2 -> sdpa")
+            return ["flash_attention_3", "flash_attention_2", "sdpa"]
         return [ATTN_IMPLEMENTATION]
 
     # CUDA long-context runs are significantly more stable with flash-attn kernels.
@@ -444,6 +447,23 @@ def resolve_attention_impl(runtime_backend):
         print(f"Skipping flash_attention_3 on this CUDA device: {fa3_reason}")
         return ["flash_attention_2", "sdpa"]
     return ["sdpa"]
+
+
+def probe_attention_runtime(model, runtime_backend):
+    """Run a tiny forward pass to catch runtime kernel incompatibilities early."""
+    if runtime_backend != "cuda":
+        return True, None
+
+    device = next(model.parameters()).device
+    test_input_ids = torch.tensor([[1, 2, 3, 4]], device=device, dtype=torch.long)
+    test_attention_mask = torch.ones_like(test_input_ids)
+
+    try:
+        with torch.inference_mode():
+            _ = model(input_ids=test_input_ids, attention_mask=test_attention_mask, use_cache=False)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
 
 
 def load_tokenizer(model_id):
@@ -537,6 +557,16 @@ def train():
                 attn_implementation=attention_impl,
                 trust_remote_code=True,
             )
+            ok, probe_error = probe_attention_runtime(model, runtime_backend)
+            if not ok:
+                print(
+                    f"Runtime probe failed for attn_implementation={attention_impl}: {probe_error}"
+                )
+                del model
+                model = None
+                if runtime_backend == "cuda":
+                    torch.cuda.empty_cache()
+                continue
             print(f"Loaded model with attn_implementation={attention_impl}")
             break
         except Exception as exc:

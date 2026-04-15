@@ -55,9 +55,6 @@ case "$ACCELERATOR_BACKEND" in
 		;;
 	cuda)
 		export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
-		if [[ "${ATTN_IMPLEMENTATION}" == "auto" ]]; then
-			export ATTN_IMPLEMENTATION=flash_attention_3
-		fi
 		DEFAULT_BATCH_SIZE=1
 		DEFAULT_GRADIENT_ACCUMULATION_STEPS=16
 		unset TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL || true
