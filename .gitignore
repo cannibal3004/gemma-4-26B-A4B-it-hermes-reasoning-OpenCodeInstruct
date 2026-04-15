@@ -34,11 +34,17 @@ optimizer.pt
 scheduler.pt
 rng_state.pth
 trainer_state.json
+*.log
+*.csv
+*.json
 
 # Model/checkpoint directories
 checkpoint-*/
 gemma-hermes-*/
 gemma-4-*/
+test-output/
+output_colab/
+quantized/
 
 # Runtime caches
 unsloth_compiled_cache/
