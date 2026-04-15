@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+# This launcher supports two very different stable paths:
+# - Local ROCm/Strix: long-context defaults (65k) are practical and fast enough.
+# - Colab CUDA: fallback attention paths may require much shorter contexts (8k).
+
+export TF_CPP_MIN_LOG_LEVEL=${TF_CPP_MIN_LOG_LEVEL:-3}
+
 detect_accelerator_backend() {
 	python - <<'PY'
 import torch
@@ -67,6 +73,8 @@ export PREFER_FLASH_ATTENTION_3=${PREFER_FLASH_ATTENTION_3:-false}
 DEFAULT_BATCH_SIZE=2
 DEFAULT_GRADIENT_ACCUMULATION_STEPS=8
 
+# Backend-specific sequence defaults keep ROCm on the original long-context path
+# while preventing CUDA/SDPA fallback runs from OOMing on Colab.
 MAX_SEQ_LENGTH_ROCM=65536
 MAX_SEQ_LENGTH_CUDA=8192
 CHUNK_STRIDE_ROCM=49152

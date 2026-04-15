@@ -79,6 +79,9 @@ TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_DIR", os.path.join(OUTPUT_DIR, 
 ATTN_IMPLEMENTATION = os.getenv("ATTN_IMPLEMENTATION", "auto").strip().lower()
 PREFER_FLASH_ATTENTION_3 = os.getenv("PREFER_FLASH_ATTENTION_3", "false").lower() in {"1", "true", "yes", "y"}
 
+# Newer transformers prefers this environment variable over TrainingArguments.logging_dir.
+os.environ.setdefault("TENSORBOARD_LOGGING_DIR", TENSORBOARD_LOG_DIR)
+
 
 def convert_custom_layers(model):
     """
@@ -491,6 +494,24 @@ def load_tokenizer(model_id):
     return AutoTokenizer.from_pretrained(model_id, trust_remote_code=True, **tokenizer_kwargs)
 
 
+def align_special_tokens(model, tokenizer):
+    if tokenizer.eos_token_id is not None:
+        model.config.eos_token_id = tokenizer.eos_token_id
+    if tokenizer.bos_token_id is not None:
+        model.config.bos_token_id = tokenizer.bos_token_id
+    if tokenizer.pad_token_id is not None:
+        model.config.pad_token_id = tokenizer.pad_token_id
+
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is not None:
+        if tokenizer.eos_token_id is not None:
+            generation_config.eos_token_id = tokenizer.eos_token_id
+        if tokenizer.bos_token_id is not None:
+            generation_config.bos_token_id = tokenizer.bos_token_id
+        if tokenizer.pad_token_id is not None:
+            generation_config.pad_token_id = tokenizer.pad_token_id
+
+
 def train():
     runtime_backend = detect_runtime_backend()
     print(f"Starting fine-tuning for {MODEL_ID}")
@@ -572,6 +593,7 @@ def train():
                     torch.cuda.empty_cache()
                 continue
             print(f"Loaded model with attn_implementation={attention_impl}")
+            align_special_tokens(model, tokenizer)
             break
         except Exception as exc:
             last_exception = exc
@@ -593,6 +615,7 @@ def train():
                 raise RuntimeError(
                     f"Final SDPA fallback failed runtime probe: {probe_error}"
                 )
+            align_special_tokens(model, tokenizer)
         else:
             raise RuntimeError("Unable to load model with requested attention backend(s)") from last_exception
 
@@ -613,7 +636,6 @@ def train():
 
     training_args_kwargs = {
         "output_dir": OUTPUT_DIR,
-        "logging_dir": TENSORBOARD_LOG_DIR,
         "per_device_train_batch_size": BATCH_SIZE,
         "gradient_accumulation_steps": GRADIENT_ACCUMULATION_STEPS,
         "learning_rate": LEARNING_RATE,
