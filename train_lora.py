@@ -414,12 +414,35 @@ def detect_runtime_backend():
     return "cuda"
 
 
+def flash_attention_3_supported(runtime_backend):
+    if runtime_backend != "cuda" or not torch.cuda.is_available():
+        return False, "CUDA runtime not available"
+
+    major, minor = torch.cuda.get_device_capability(0)
+    # Current flash-attn-3 wheels are generally Hopper-targeted (sm90+).
+    if major < 9:
+        return False, f"compute capability sm_{major}{minor} does not support this flash-attn-3 build"
+    return True, "supported"
+
+
 def resolve_attention_impl(runtime_backend):
+    fa3_ok, fa3_reason = flash_attention_3_supported(runtime_backend)
+
     if ATTN_IMPLEMENTATION != "auto":
+        if ATTN_IMPLEMENTATION == "flash_attention_3" and not fa3_ok:
+            print(
+                "Requested ATTN_IMPLEMENTATION=flash_attention_3 but it is incompatible with this GPU: "
+                f"{fa3_reason}. Falling back to flash_attention_2 -> sdpa."
+            )
+            return ["flash_attention_2", "sdpa"]
         return [ATTN_IMPLEMENTATION]
+
     # CUDA long-context runs are significantly more stable with flash-attn kernels.
     if runtime_backend == "cuda":
-        return ["flash_attention_3", "flash_attention_2", "sdpa"]
+        if fa3_ok:
+            return ["flash_attention_3", "flash_attention_2", "sdpa"]
+        print(f"Skipping flash_attention_3 on this CUDA device: {fa3_reason}")
+        return ["flash_attention_2", "sdpa"]
     return ["sdpa"]
 
 
